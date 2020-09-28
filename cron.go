@@ -52,6 +52,9 @@ type Entry struct {
 	// snapshot or remove it.
 	ID EntryID
 
+	// only once and then remove the schedule
+	Oneshot bool
+
 	// Schedule on which this job should be run.
 	Schedule Schedule
 
@@ -153,6 +156,18 @@ func (c *Cron) AddJob(spec string, cmd Job) (EntryID, error) {
 	return c.Schedule(schedule, cmd), nil
 }
 
+// AddOneshotJob adds a Job to the Cron to be run on the given schedule.
+// The spec is parsed using the time zone of this Cron instance as the default.
+// An opaque ID is returned that can be used to later remove it. The schedule
+// will be removed after run.
+func (c *Cron) AddOneshotJob(spec string, cmd Job) (EntryID, error) {
+	schedule, err := c.parser.Parse(spec)
+	if err != nil {
+		return 0, err
+	}
+	return c.ScheduleOneshot(schedule, cmd), nil
+}
+
 // Schedule adds a Job to the Cron to be run on the given schedule.
 // The job is wrapped with the configured Chain.
 func (c *Cron) Schedule(schedule Schedule, cmd Job) EntryID {
@@ -161,6 +176,27 @@ func (c *Cron) Schedule(schedule Schedule, cmd Job) EntryID {
 	c.nextID++
 	entry := &Entry{
 		ID:         c.nextID,
+		Schedule:   schedule,
+		WrappedJob: c.chain.Then(cmd),
+		Job:        cmd,
+	}
+	if !c.running {
+		c.entries = append(c.entries, entry)
+	} else {
+		c.add <- entry
+	}
+	return entry.ID
+}
+
+// Schedule adds a Job to the Cron to be run on the given schedule.
+// The job is wrapped with the configured Chain. The schedule only run onece
+func (c *Cron) ScheduleOneshot(schedule Schedule, cmd Job) EntryID {
+	c.runningMu.Lock()
+	defer c.runningMu.Unlock()
+	c.nextID++
+	entry := &Entry{
+		ID:         c.nextID,
+		Oneshot:    true,
 		Schedule:   schedule,
 		WrappedJob: c.chain.Then(cmd),
 		Job:        cmd,
@@ -272,6 +308,10 @@ func (c *Cron) run() {
 					}
 					c.startJob(e.WrappedJob)
 					e.Prev = e.Next
+					if e.Oneshot {
+						c.Remove(e.ID)
+						return
+					}
 					e.Next = e.Schedule.Next(now)
 					c.logger.Info("run", "now", now, "entry", e.ID, "next", e.Next)
 				}
