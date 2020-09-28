@@ -34,6 +34,7 @@ type ScheduleParser interface {
 // Job is an interface for submitted cron jobs.
 type Job interface {
 	Run()
+	SetJobID(ID EntryID)
 }
 
 // Schedule describes a job's duty cycle.
@@ -134,6 +135,7 @@ func New(opts ...Option) *Cron {
 type FuncJob func()
 
 func (f FuncJob) Run() { f() }
+func (f FuncJob) SetJobID(ID EntryID) { }
 
 // AddFunc adds a func to the Cron to be run on the given schedule.
 // The spec is parsed using the time zone of this Cron instance as the default.
@@ -159,6 +161,7 @@ func (c *Cron) Schedule(schedule Schedule, cmd Job) EntryID {
 	c.runningMu.Lock()
 	defer c.runningMu.Unlock()
 	c.nextID++
+	cmd.SetJobID(c.nextID)
 	entry := &Entry{
 		ID:         c.nextID,
 		Schedule:   schedule,
